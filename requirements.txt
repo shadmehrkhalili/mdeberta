@@ -3,5 +3,5 @@ datasets
 accelerate
 scikit-learn
 evaluate
-torch # این برای PyTorch هست که Hugging Face ازش استفاده میکنه
-huggingface_hub # برای لاگین و آپلود به هاب
+torch
+huggingface_hub
