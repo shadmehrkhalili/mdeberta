@@ -112,3 +112,106 @@ if __name__ == "__main__":
     print("Metrics defined. Ready for strategy application and Trainer setup.")
 
 # ... (rest of the file) ...
+
+
+# ... (previous code in main() function, from stage 3) ...
+
+    # --- 5. اعمال استراتژی آموزش (فریز کردن پارامترها و تنظیم هایپرپارامترها) ---
+    print(f"Applying training strategy: {training_strategy}")
+    if training_strategy == "head_only":
+        # **استراتژی 1: آموزش فقط Head**
+        # فریز کردن تمام پارامترهای مدل به جز لایه دسته‌بندی (classifier/head)
+        for name, param in model.named_parameters():
+            if "classifier" not in name: # "classifier" نام لایه Head در مدل‌های Hugging Face است
+                param.requires_grad = False
+            # else: # میتونید این خط رو فعال کنید تا ببینید کدوم پارامترها آموزش میبینن
+            #     print(f"Parameter '{name}' is NOT frozen and will be trained (Head).")
+        print("Model backbone (feature extractor) frozen. Only classification head will be trained.")
+        
+        # هایپرپارامترهای بهینه برای آموزش فقط Head
+        num_epochs = 10 # تعداد اپوک‌ها رو بیشتر کنید چون سریعتره
+        batch_size = 32 # اندازه بچ میتونه بزرگتر باشه چون RAM کمتری مصرف میشه
+        learning_rate = 5e-4 # نرخ یادگیری بالاتر برای Head
+
+    elif training_strategy == "layer_wise":
+        # **استراتژی 2: آموزش Head و لایه‌های آخر Backbone**
+        # mDeBERTa V3 Base دارای 12 لایه ترنسفورمر (indexer از 0 تا 11) است.
+        # فرض می‌کنیم می‌خواهیم 4 لایه آخر (لایه‌های 8، 9، 10، 11) و Head را آموزش دهیم.
+        for name, param in model.named_parameters():
+            if any(f"encoder.layer.{i}" in name for i in range(8, 12)) or "classifier" in name:
+                param.requires_grad = True # این لایه‌ها آموزش می‌بینند
+                # print(f"Parameter '{name}' is NOT frozen (Layer-wise).")
+            else:
+                param.requires_grad = False # بقیه فریز می‌شوند
+        print("Model backbone (last 4 layers) and classification head will be trained.")
+        
+        # هایپرپارامترهای بهینه برای آموزش لایه‌ای
+        num_epochs = 6 # تعداد اپوک‌ها کمتر از Head-Only، بیشتر از Full
+        batch_size = 16 # اندازه بچ متوسط
+        learning_rate = 2e-5 # نرخ یادگیری متوسط
+
+    elif training_strategy == "full_fine_tune":
+        # **استراتژی 3: آموزش کامل مدل (Full Fine-tuning)**
+        # تمام پارامترهای مدل آموزش می‌بینند.
+        for name, param in model.named_parameters():
+            param.requires_grad = True # همه پارامترها آموزش می‌بینند
+        print("Full model fine-tuning. All parameters will be trained.")
+        
+        # هایپرپارامترهای بهینه برای Full Fine-tuning
+        num_epochs = 3 # تعداد اپوک‌ها باید کمتر باشد (Overfitting)
+        batch_size = 8 # اندازه بچ باید کوچکتر باشد (مصرف RAM بالا)
+        learning_rate = 5e-6 # نرخ یادگیری باید پایین‌تر باشد
+
+    else:
+        raise ValueError(f"Unknown training strategy: {training_strategy}. Choose from 'head_only', 'layer_wise', 'full_fine_tune'.")
+
+    # --- تعداد پارامترهای قابل آموزش را چاپ کنید (برای تأیید) ---
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,} ({trainable_params/total_params:.2%})")
+
+    # --- 6. تنظیم Training Arguments و Trainer ---
+    print("Configuring TrainingArguments...")
+    # مسیر ذخیره‌سازی مدل در Google Drive شما (این پوشه رو خودتون در درایو بسازید)
+    output_dir = f"/content/drive/MyDrive/mdeberta_snappfood_sentiment_{training_strategy}"
+
+    # اگر پوشه خروجی وجود نداشت، آن را ایجاد کن (مهم برای Colab)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created output directory: {output_dir}")
+
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        num_train_epochs=num_epochs,        # تعداد اپوک‌ها بر اساس استراتژی
+        per_device_train_batch_size=batch_size, # اندازه بچ بر اساس استراتژی
+        per_device_eval_batch_size=batch_size,  # اندازه بچ برای ارزیابی
+        learning_rate=learning_rate,        # نرخ یادگیری بر اساس استراتژی
+        warmup_steps=500,                   # گام‌های warmup
+        weight_decay=0.01,                  # وزن‌کاهی (برای جلوگیری از overfitting)
+        logging_dir=f'{output_dir}/logs',   # مسیر لاگ‌ها برای TensorBoard
+        logging_strategy="epoch",           # لاگ‌برداری بعد از هر اپوک
+        evaluation_strategy="epoch",        # ارزیابی بعد از هر اپوک
+        save_strategy="epoch",              # ذخیره مدل بعد از هر اپوک
+        load_best_model_at_end=True,        # بارگذاری بهترین مدل بر اساس معیار در پایان
+        metric_for_best_model="f1_weighted", # معیاری که برای انتخاب بهترین مدل استفاده می‌شود
+        greater_is_better=True,             # آیا مقدار بالاتر این معیار بهتر است؟ (بله برای F1)
+        # push_to_hub=True, # اگر می‌خواهید مدل رو به Hugging Face Hub آپلود کنید (نیاز به notebook_login)
+        # hub_model_id=f"YOUR_HUGGINGFACE_USERNAME/mdeberta-v3-base-snappfood-{training_strategy}", # نام ریپازیتوری در هاب
+    )
+    print("TrainingArguments configured.")
+
+    print("Initializing Trainer...")
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        compute_metrics=compute_metrics,
+    )
+    print("Trainer initialized.")
+    
+    # بقیه کد در مراحل بعدی اضافه خواهند شد...
+    print("Trainer is ready. Next step: Training and Evaluation.")
+
+# ... (rest of the file) ...
