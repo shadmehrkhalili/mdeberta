@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+/content/drive/ # پوشه گوگل درایو در کولب
+/model_checkpoints/ # هر پوشه‌ای که برای ذخیره مدل استفاده میکنید
+*.pt
+*.bin
+local_dev.ipynb # نوت‌بوک توسعه محلی شما نباید به گیت Push بشه
