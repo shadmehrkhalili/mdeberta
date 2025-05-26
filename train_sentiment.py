@@ -215,3 +215,26 @@ if __name__ == "__main__":
     print("Trainer is ready. Next step: Training and Evaluation.")
 
 # ... (rest of the file) ...
+
+# ... (previous code in main() function, from stage 4) ...
+
+    # --- 7. شروع آموزش و ارزیابی نهایی ---
+    print("Starting model training...")
+    trainer.train()
+    print("Training finished.")
+
+    print("\nEvaluating on test set...")
+    # برای ارزیابی نهایی از test_dataset استفاده می‌کنیم (همونطور که در Trainer تعریف شده)
+    test_results = trainer.evaluate(eval_dataset=test_dataset) 
+    print(f"\nTest results: {test_results}")
+
+    # ذخیره مدل فاین‌تیون شده نهایی
+    final_model_path = os.path.join(output_dir, "final_model")
+    trainer.save_model(final_model_path)
+    print(f"Fine-tuned model saved to {final_model_path}")
+
+    # اگر push_to_hub=True رو در TrainingArguments فعال کرده باشید و لاگین کرده باشید:
+    # trainer.push_to_hub()
+    print("Fine-tuning process completed successfully!")
+
+# ... (the `if __name__ == "__main__":` block at the very end of the file) ...
