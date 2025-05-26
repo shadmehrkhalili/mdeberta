@@ -75,3 +75,40 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     main(training_strategy=args.strategy)
+
+    # ... (previous code in main() function, from stage 2) ...
+
+    # --- 4. تعریف معیارهای ارزیابی ---
+    print("Defining compute_metrics function...")
+    # بارگذاری معیارهای مورد نیاز
+    accuracy_metric = evaluate.load("accuracy")
+    f1_metric = evaluate.load("f1")
+    precision_metric = evaluate.load("precision")
+    recall_metric = evaluate.load("recall")
+
+    def compute_metrics(eval_pred):
+        logits, labels = eval_pred
+        # تبدیل لاگیت‌ها به پیش‌بینی‌های نهایی (اندیس کلاس با بالاترین احتمال)
+        predictions = np.argmax(logits, axis=-1)
+        
+        # محاسبه Accuracy
+        accuracy = accuracy_metric.compute(predictions=predictions, references=labels)
+        
+        # محاسبه F1-score، Precision و Recall با average='weighted'
+        # برای دسته‌بندی چندکلاسه نامتوازن، از average='weighted' استفاده می‌کنیم
+        f1_weighted = f1_metric.compute(predictions=predictions, references=labels, average="weighted")
+        precision_weighted = precision_metric.compute(predictions=predictions, references=labels, average="weighted")
+        recall_weighted = recall_metric.compute(predictions=predictions, references=labels, average="weighted")
+        
+        return {
+            "accuracy": accuracy["accuracy"],
+            "f1_weighted": f1_weighted["f1"],
+            "precision_weighted": precision_weighted["precision"],
+            "recall_weighted": recall_weighted["recall"],
+        }
+    print("compute_metrics function defined.")
+
+    # بقیه کد در مراحل بعدی اضافه خواهند شد...
+    print("Metrics defined. Ready for strategy application and Trainer setup.")
+
+# ... (rest of the file) ...
