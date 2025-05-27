@@ -163,7 +163,7 @@ def main(training_strategy: str):
         }
     print("compute_metrics function defined.")
 
-    # --- 5. Apply Training Strategy (Freeze parameters and set hyperparameters) ---
+    # --- 5. Apply Training Strategy (Freeze parameters and set hyperpaameters) ---
     print(f"Applying training strategy: {training_strategy}")
     if training_strategy == "head_only":
         for name, param in model.named_parameters():
