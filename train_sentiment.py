@@ -269,7 +269,7 @@ def main(training_strategy: str):
 
     print("Fine-tuning process completed successfully!")
 
-# This block allows the script to be run from the command line with arguments
+# This block allows the script to be run fromthe command line with arguments
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Fine-tune mDeBERTa-v3-base for sentiment analysis.")
