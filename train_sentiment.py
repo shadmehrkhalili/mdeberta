@@ -3,10 +3,11 @@
 import os
 import numpy as np
 import torch
-import pandas as pd # اضافه شده برای خواندن فایل‌های CSV
-from datasets import Dataset, DatasetDict # اضافه شده برای ساخت DatasetDict
+import pandas as pd
+from datasets import Dataset, DatasetDict
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
-import evaluate # برای بارگذاری معیارهای ارزیابی
+import evaluate
+# from huggingface_hub import snapshot_download # دیگر نیازی به این نیست
 
 def main(training_strategy: str):
     """
@@ -26,7 +27,7 @@ def main(training_strategy: str):
     print(f"Loading datasets from local CSV files:")
     print(f"  Train: {train_csv_path}")
     print(f"  Dev (Validation): {dev_csv_path}")
-    print(f"  Test: {test_csv_path}")
+    print(f"  Test:  {test_csv_path}")
 
     try:
         # خواندن هر سه فایل CSV با pandas
@@ -35,7 +36,7 @@ def main(training_strategy: str):
         test_df = pd.read_csv(test_csv_path)
         
         # تبدیل DataFrame ها به Hugging Face DatasetDict
-        # مطمئن شوید که نام ستون‌های حاوی متن و لیبل در فایل‌های CSV شما 'text' و 'label' هستند.
+        # نام ستون‌های حاوی متن و لیبل در فایل‌های CSV شما باید 'text' و 'label' باشند.
         # اگر نام ستون‌ها متفاوت است، قبل از Dataset.from_pandas باید آن‌ها را تغییر نام دهید.
         # مثال: train_df = train_df.rename(columns={'Your_Text_Column': 'text', 'Your_Label_Column': 'label'})
         dataset = DatasetDict({
@@ -63,7 +64,6 @@ def main(training_strategy: str):
 
     # --- 2. Define Tokenization Function and Preprocess Dataset ---
     def tokenize_function(examples):
-        # 'text' is the column name for text in the Snappfood dataset.
         return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=128)
 
     print("Defining tokenization function.")
@@ -89,25 +89,20 @@ def main(training_strategy: str):
     print(f"Test dataset size: {len(test_dataset)}")
 
     # --- 3. Load Model for Sequence Classification ---
-    # Determine the number of labels from the original train_df
-    num_labels = train_df['label'].nunique() 
+    num_labels = train_df['label'].nunique() # تعداد برچسب‌ها را از DataFrame اصلی بگیرید
     print(f"Number of labels detected: {num_labels}")
 
-    # Define ID to label and label to ID mappings (for clear output and model configuration)
-    # مطمئن شوید این mapping با داده های شما مطابقت دارد (0:negative, 1:neutral, 2:positive)
-    id2label = {0: "negative", 1: "neutral", 2: "positive"} 
+    id2label = {0: "negative", 1: "neutral", 2: "positive"} # مطمئن شوید این mapping با داده های شما مطابقت دارد
     label2id = {"negative": 0, "neutral": 1, "positive": 2}
 
     print(f"Loading model: {model_name} with {num_labels} labels for sequence classification")
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
-    # Update model config with label mappings
     model.config.id2label = id2label
     model.config.label2id = label2id
     print("Model loaded successfully.")
     
     # --- 4. Define Evaluation Metrics (Accuracy, F1, Precision, Recall) ---
     print("Defining compute_metrics function...")
-    # Load required evaluation metrics from 'evaluate' library
     accuracy_metric = evaluate.load("accuracy")
     f1_metric = evaluate.load("f1")
     precision_metric = evaluate.load("precision")
@@ -115,13 +110,9 @@ def main(training_strategy: str):
 
     def compute_metrics(eval_pred):
         logits, labels = eval_pred
-        # Convert logits to final predictions (index of the class with highest probability)
         predictions = np.argmax(logits, axis=-1)
         
-        # Calculate Accuracy
         accuracy = accuracy_metric.compute(predictions=predictions, references=labels)
-        
-        # Calculate F1-score, Precision, and Recall using 'weighted' averaging for multi-class imbalance
         f1_weighted = f1_metric.compute(predictions=predictions, references=labels, average="weighted")
         precision_weighted = precision_metric.compute(predictions=predictions, references=labels, average="weighted")
         recall_weighted = recall_metric.compute(predictions=predictions, references=labels, average="weighted")
@@ -137,22 +128,16 @@ def main(training_strategy: str):
     # --- 5. Apply Training Strategy (Freeze parameters and set hyperparameters) ---
     print(f"Applying training strategy: {training_strategy}")
     if training_strategy == "head_only":
-        # Strategy 1: Train Only the Classification Head
-        # Freeze all model parameters except for the 'classifier' layer (the head).
         for name, param in model.named_parameters():
             if "classifier" not in name:
                 param.requires_grad = False
         print("Model backbone (feature extractor) frozen. Only classification head will be trained.")
         
-        # Optimized hyperparameters for Head-Only training (faster, less resource-intensive)
         num_epochs = 10 
         batch_size = 32 
         learning_rate = 5e-4 
 
     elif training_strategy == "layer_wise":
-        # Strategy 2: Train Head and Last Layers of Backbone
-        # mDeBERTa V3 Base has 12 Transformer layers (indexed 0 to 11).
-        # We'll train the last 4 layers (layers 8, 9, 10, 11) and the classification head.
         for name, param in model.named_parameters():
             if any(f"encoder.layer.{i}" in name for i in range(8, 12)) or "classifier" in name:
                 param.requires_grad = True 
@@ -160,18 +145,15 @@ def main(training_strategy: str):
                 param.requires_grad = False 
         print("Model backbone (last 4 layers) and classification head will be trained.")
         
-        # Optimized hyperparameters for Layer-Wise training (medium resources, good performance)
         num_epochs = 6 
         batch_size = 16
         learning_rate = 2e-5 
 
     elif training_strategy == "full_fine_tune":
-        # Strategy 3: Full Fine-tuning (Train all model parameters)
         for name, param in model.named_parameters():
             param.requires_grad = True 
         print("Full model fine-tuning. All parameters will be trained.")
         
-        # Optimized hyperparameters for Full Fine-tuning (most resource-intensive, highest risk of overfitting)
         num_epochs = 3
         batch_size = 8
         learning_rate = 5e-6 
@@ -179,7 +161,6 @@ def main(training_strategy: str):
     else:
         raise ValueError(f"Unknown training strategy: {training_strategy}. Choose from 'head_only', 'layer_wise', 'full_fine_tune'.")
 
-    # --- Print Trainable Parameters (for confirmation) ---
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total parameters: {total_params:,}")
@@ -187,7 +168,6 @@ def main(training_strategy: str):
 
     # --- 6. Configure Training Arguments and Trainer ---
     print("Configuring TrainingArguments...")
-    # Output directory in Google Drive (make sure this folder exists or is created by your script)
     output_dir = f"/content/drive/MyDrive/mdeberta_snappfood_sentiment_{training_strategy}"
 
     if not os.path.exists(output_dir):
@@ -209,8 +189,6 @@ def main(training_strategy: str):
         load_best_model_at_end=True,        
         metric_for_best_model="f1_weighted", 
         greater_is_better=True,             
-        # push_to_hub=True, # Uncomment and configure if pushing to Hugging Face Hub
-        # hub_model_id=f"YOUR_HUGGINGFACE_USERNAME/mdeberta-v3-base-snappfood-{training_strategy}", 
     )
     print("TrainingArguments configured.")
 
