@@ -16,6 +16,9 @@ def main(training_strategy: str):
     apply training strategy, train, and evaluate the model for sentiment analysis.
     """
     # --- 1. Load Dataset from Google Drive CSVs and Tokenizer ---
+    # Path to your CSV dataset files in Google Drive.
+    # Ensure these paths are correct and your CSV files are uploaded there.
+    # Assuming files are in '/content/drive/MyDrive/nlp_project_data'. Adjust if different.
     data_folder_path = "/content/drive/MyDrive/nlp_project_data" 
     train_csv_path = os.path.join(data_folder_path, "train.csv")
     dev_csv_path = os.path.join(data_folder_path, "dev.csv") # dev.csv will be used as validation
@@ -31,26 +34,30 @@ def main(training_strategy: str):
         column_names = ['id', 'text', 'sentiment_str', 'label'] 
 
         # --- CRITICAL FIX FOR CSV LOADING ---
-        # Using engine='c' (faster, more robust for basic parsing)
-        # on_bad_lines='skip' will ignore problematic lines, preventing ParserError.
-        # quotechar=None and quoting=csv.QUOTE_NONE are for unquoted tab-separated data.
-        # lineterminator is REMOVED as it's not supported by 'python' engine and 'c' engine usually handles it automatically.
-        
+        # Explicitly setting tab as separator, no header, defining column names,
+        # IMPORTANT: skiprows=1 is added to skip the first row (which might contain problematic data or header-like info).
+        # preventing misinterpretation of quotes, using python engine for robustness,
+        # and skipping bad lines.
         train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names, 
-                               skiprows=1,
+                               skiprows=1, 
                                quotechar=None, quoting=csv.QUOTE_NONE, 
-                               engine='c', on_bad_lines='skip', # Removed lineterminator here
+                               engine='python', on_bad_lines='skip', 
+                               lineterminator='\n', # This parameter is still needed for pandas Python engine
                                encoding='utf-8')
         dev_df = pd.read_csv(dev_csv_path, sep='\t', header=None, names=column_names,
+                             skiprows=1, 
                              quotechar=None, quoting=csv.QUOTE_NONE, 
-                             engine='c', on_bad_lines='skip', # Removed lineterminator here
+                             engine='python', on_bad_lines='skip', 
+                             lineterminator='\n', # This parameter is still needed for pandas Python engine
                              encoding='utf-8')
         test_df = pd.read_csv(test_csv_path, sep='\t', header=None, names=column_names,
+                              skiprows=1, 
                               quotechar=None, quoting=csv.QUOTE_NONE, 
-                              engine='c', on_bad_lines='skip', # Removed lineterminator here
+                              engine='python', on_bad_lines='skip', 
+                              lineterminator='\n', # This parameter is still needed for pandas Python engine
                               encoding='utf-8')
         
-        print("Successfully loaded CSVs with explicit tab delimiter and robust C parser settings.")
+        print("Successfully loaded CSVs with explicit tab delimiter and robust parsing settings.")
 
         # Verify initial load and columns 
         print("Initial DataFrame head (train_df):")
@@ -76,7 +83,6 @@ def main(training_strategy: str):
             dev_df['label'] = dev_df['label'].astype(int)
             test_df['label'] = test_df['label'].astype(int)
             print("Converted 'label' column to integer type.")
-
 
         # Convert DataFrames to Hugging Face DatasetDict
         dataset = DatasetDict({
@@ -164,7 +170,7 @@ def main(training_strategy: str):
         }
     print("compute_metrics function defined.")
 
-    # --- 5. Apply Training Strategy (Freeze parameters and set hyperpaameters) ---
+    # --- 5. Apply Training Strategy (Freeze parameters and set hyperparameters) ---
     print(f"Applying training strategy: {training_strategy}")
     if training_strategy == "head_only":
         for name, param in model.named_parameters():
@@ -223,7 +229,7 @@ def main(training_strategy: str):
         weight_decay=0.01,                  
         logging_dir=f'{output_dir}/logs',   
         logging_strategy="epoch",           
-        evaluation_strategy="epoch",        
+        eval_strategy="epoch", # Corrected parameter name
         save_strategy="epoch",              
         load_best_model_at_end=True,        
         metric_for_best_model="f1_weighted", 
