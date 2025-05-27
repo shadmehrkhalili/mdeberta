@@ -4,4 +4,5 @@ accelerate
 scikit-learn
 evaluate
 torch
+pandas
 huggingface_hub
