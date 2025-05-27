@@ -37,6 +37,7 @@ def main(training_strategy: str):
         # lineterminator is REMOVED as it's not supported by 'python' engine and 'c' engine usually handles it automatically.
         
         train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names, 
+                               skiprows=1,
                                quotechar=None, quoting=csv.QUOTE_NONE, 
                                engine='c', on_bad_lines='skip', # Removed lineterminator here
                                encoding='utf-8')
