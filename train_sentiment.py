@@ -30,46 +30,28 @@ def main(training_strategy: str):
         # Define expected column names based on your sample: ID, Text, String Sentiment, Numeric Label.
         column_names = ['id', 'text', 'sentiment_str', 'label'] 
 
-        # --- IMPORTANT CHANGE FOR CSV LOADING ---
-        # We try a very robust method using delim_whitespace or explicit tab and ignoring bad lines.
-        # on_bad_lines='skip' is crucial here. If it still fails, the line might be fundamentally unreadable.
-        # Using error_bad_lines (older pandas) is also an option if on_bad_lines doesn't fully skip.
+        # --- CRITICAL FIX FOR CSV LOADING ---
+        # Using engine='c' (faster, more robust for basic parsing)
+        # on_bad_lines='skip' will ignore problematic lines, preventing ParserError.
+        # quotechar=None and quoting=csv.QUOTE_NONE are for unquoted tab-separated data.
+        # lineterminator is REMOVED as it's not supported by 'python' engine and 'c' engine usually handles it automatically.
         
-        # Method 1: Using sep='\t' with strong quoting and error handling
-        # This is the standard approach we've tried.
-        try:
-            train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names, 
-                                   quotechar=None, quoting=csv.QUOTE_NONE, 
-                                   engine='python', on_bad_lines='skip', 
-                                   lineterminator='\n', encoding='utf-8')
-            dev_df = pd.read_csv(dev_csv_path, sep='\t', header=None, names=column_names,
-                                 quotechar=None, quoting=csv.QUOTE_NONE, 
-                                 engine='python', on_bad_lines='skip', 
-                                 lineterminator='\n', encoding='utf-8')
-            test_df = pd.read_csv(test_csv_path, sep='\t', header=None, names=column_names,
-                                  quotechar=None, quoting=csv.QUOTE_NONE, 
-                                  engine='python', on_bad_lines='skip', 
-                                  lineterminator='\n', encoding='utf-8')
-            print("Successfully loaded CSVs with explicit tab delimiter and quote handling.")
+        train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names, 
+                               quotechar=None, quoting=csv.QUOTE_NONE, 
+                               engine='c', on_bad_lines='skip', # Removed lineterminator here
+                               encoding='utf-8')
+        dev_df = pd.read_csv(dev_csv_path, sep='\t', header=None, names=column_names,
+                             quotechar=None, quoting=csv.QUOTE_NONE, 
+                             engine='c', on_bad_lines='skip', # Removed lineterminator here
+                             encoding='utf-8')
+        test_df = pd.read_csv(test_csv_path, sep='\t', header=None, names=column_names,
+                              quotechar=None, quoting=csv.QUOTE_NONE, 
+                              engine='c', on_bad_lines='skip', # Removed lineterminator here
+                              encoding='utf-8')
+        
+        print("Successfully loaded CSVs with explicit tab delimiter and robust C parser settings.")
 
-        except pd.errors.ParserError as pe:
-            print(f"WARNING: Initial CSV load with explicit tab delimiter failed: {pe}. Trying alternative loading method.")
-            # Method 2: Trying with regex separator for multiple whitespace or generic delimiters
-            # This is a more flexible approach if tabs/spaces are inconsistent.
-            try:
-                train_df = pd.read_csv(train_csv_path, sep='\s+', header=None, names=column_names, 
-                                       engine='python', on_bad_lines='skip', encoding='utf-8')
-                dev_df = pd.read_csv(dev_csv_path, sep='\s+', header=None, names=column_names, 
-                                     engine='python', on_bad_lines='skip', encoding='utf-8')
-                test_df = pd.read_csv(test_csv_path, sep='\s+', header=None, names=column_names, 
-                                      engine='python', on_bad_lines='skip', encoding='utf-8')
-                print("Successfully loaded CSVs with flexible whitespace delimiter.")
-            except Exception as e_alt:
-                print(f"FATAL ERROR: Alternative CSV load with flexible whitespace delimiter also failed: {e_alt}.")
-                print("Please manually inspect line 501 of your train.csv file for problematic characters or formatting inconsistencies.")
-                raise # Re-raise if alternative fails as well
-
-        # Verify initial load and columns (optional but good for debugging)
+        # Verify initial load and columns 
         print("Initial DataFrame head (train_df):")
         print(train_df.head())
         print("Initial DataFrame columns (train_df):", train_df.columns.tolist())
@@ -111,7 +93,7 @@ def main(training_strategy: str):
         raise # Stop execution if file not found
     except Exception as e:
         print(f"FATAL ERROR: Could not load datasets from CSV files: {e}")
-        print("Please check CSV file formats and the delimiter. It seems to be TAB-separated with no headers.")
+        print("Please check CSV file formats and the delimiter. The robust pandas settings were used but failed.")
         print(f"Specific pandas error: {e}") # Display the exact pandas error for more debugging if needed
         raise # Stop execution if other loading error occurs
 
