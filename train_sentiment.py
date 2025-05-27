@@ -3,42 +3,58 @@
 import os
 import numpy as np
 import torch
-from datasets import load_dataset
+import pandas as pd # اضافه شده برای خواندن فایل‌های CSV
+from datasets import Dataset, DatasetDict # اضافه شده برای ساخت DatasetDict
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
-import evaluate
-from huggingface_hub import snapshot_download # مطمئن شوید این import وجود دارد
+import evaluate # برای بارگذاری معیارهای ارزیابی
 
 def main(training_strategy: str):
     """
-    Main function to load dataset, tokenize, load model, apply training strategy,
-    train, and evaluate the model for sentiment analysis.
+    Main function to load dataset (from local CSV files), tokenize, load model, 
+    apply training strategy, train, and evaluate the model for sentiment analysis.
     """
-    # --- 1. Load Dataset and Tokenizer ---
-    dataset_name = "HooshvareLab/bert-fa-base-uncased-sentiment-snappfood"
-    print(f"Loading dataset: {dataset_name}")
+    # --- 1. Load Dataset from Google Drive CSVs and Tokenizer ---
+    # مسیر فایل‌های CSV دیتاست در Google Drive شما
+    # مطمئن شوید که این مسیرها صحیح است و فایل‌های CSV شما در Google Drive آنجا قرار دارند.
+    # فرض می‌کنیم فایل‌ها در پوشه 'nlp_project_data' در MyDrive شما هستند.
+    # اگر پوشه دیگری ساختید، مسیر را اصلاح کنید.
+    data_folder_path = "/content/drive/MyDrive/nlp_project_data" 
+    train_csv_path = os.path.join(data_folder_path, "train.csv")
+    dev_csv_path = os.path.join(data_folder_path, "dev.csv") # dev.csv به عنوان validation استفاده می‌شود
+    test_csv_path = os.path.join(data_folder_path, "test.csv")
     
-    # *** Robust Dataset Loading Logic to handle FileNotFoundError ***
-    # This block attempts to load the dataset directly from Hugging Face Hub.
-    # If it fails (e.g., due to caching issues or transient network problems),
-    # it then tries to manually download it using snapshot_download and load from local path.
+    print(f"Loading datasets from local CSV files:")
+    print(f"  Train: {train_csv_path}")
+    print(f"  Dev (Validation): {dev_csv_path}")
+    print(f"  Test: {test_csv_path}")
+
     try:
-        print("Attempting to load dataset from Hugging Face Hub directly...")
-        dataset = load_dataset(dataset_name)
-        print("Dataset loaded successfully from Hugging Face Hub.")
-    except Exception as e: # Catching a broad exception to be robust
-        print(f"Direct load from Hugging Face Hub failed: {e}. Attempting manual download and local load...")
-        try:
-            # snapshot_download will cache the dataset locally in Colab's filesystem
-            # and won't re-download if it already exists.
-            local_dataset_path = snapshot_download(repo_id=dataset_name, repo_type="dataset")
-            print(f"Dataset downloaded to local path: {local_dataset_path}")
-            # Now load the dataset from the local path
-            dataset = load_dataset(local_dataset_path)
-            print("Dataset loaded successfully from local path.")
-        except Exception as download_e:
-            print(f"FATAL ERROR: Could not download or load dataset even with manual download: {download_e}")
-            print("Please check your network connection, the dataset ID, or Hugging Face Hub status.")
-            raise # Re-raise the exception if even manual download/load fails
+        # خواندن هر سه فایل CSV با pandas
+        train_df = pd.read_csv(train_csv_path)
+        dev_df = pd.read_csv(dev_csv_path)
+        test_df = pd.read_csv(test_csv_path)
+        
+        # تبدیل DataFrame ها به Hugging Face DatasetDict
+        # مطمئن شوید که نام ستون‌های حاوی متن و لیبل در فایل‌های CSV شما 'text' و 'label' هستند.
+        # اگر نام ستون‌ها متفاوت است، قبل از Dataset.from_pandas باید آن‌ها را تغییر نام دهید.
+        # مثال: train_df = train_df.rename(columns={'Your_Text_Column': 'text', 'Your_Label_Column': 'label'})
+        dataset = DatasetDict({
+            'train': Dataset.from_pandas(train_df),
+            'validation': Dataset.from_pandas(dev_df), 
+            'test': Dataset.from_pandas(test_df)
+        })
+        
+        print("All datasets loaded successfully from local CSV files.")
+        print(dataset) # چاپ ساختار دیتاست برای اطمینان
+        
+    except FileNotFoundError as e:
+        print(f"FATAL ERROR: One of the CSV files not found: {e}.")
+        print(f"Please ensure all train.csv, dev.csv, and test.csv files are uploaded to your Google Drive in the specified path: {data_folder_path}")
+        raise # متوقف کردن اجرا اگر فایل پیدا نشد
+    except Exception as e:
+        print(f"FATAL ERROR: Could not load datasets from CSV files: {e}")
+        print("Please check CSV file formats and column names ('text' and 'label').")
+        raise # متوقف کردن اجرا اگر خطای دیگری در بارگذاری رخ داد
 
     model_name = "microsoft/mdeberta-v3-base"
     print(f"Loading tokenizer from: {model_name}")
@@ -53,19 +69,19 @@ def main(training_strategy: str):
     print("Defining tokenization function.")
     
     print("Tokenizing dataset...")
+    # Map tokenization function over all splits (train, validation, test)
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
     print("Tokenization complete.")
 
-    # Remove unnecessary columns and rename 'label' column to 'labels' (required by Trainer)
-    tokenized_dataset = tokenized_dataset.remove_columns(["text"])
+    # Remove unnecessary columns and rename 'label' column to 'labels' (required by Hugging Face Trainer)
+    # '__index_level_0__' ستونی است که pandas ممکن است در صورت reset_index ایجاد کند.
+    tokenized_dataset = tokenized_dataset.remove_columns(["text", "__index_level_0__"]) 
     tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
     # Set the format to PyTorch tensors for compatibility with the model
     tokenized_dataset.set_format("torch")
 
-    # Split dataset into train, validation, and test sets
-    # The HooshvareLab dataset already has these splits.
     train_dataset = tokenized_dataset["train"]
-    eval_dataset = tokenized_dataset["validation"]
+    eval_dataset = tokenized_dataset["validation"] # استفاده از dev.csv که به validation تغییر نام داده شد
     test_dataset = tokenized_dataset["test"]
 
     print(f"Train dataset size: {len(train_dataset)}")
@@ -73,12 +89,13 @@ def main(training_strategy: str):
     print(f"Test dataset size: {len(test_dataset)}")
 
     # --- 3. Load Model for Sequence Classification ---
-    # Determine the number of labels from the dataset features (0: negative, 1: neutral, 2: positive)
-    num_labels = dataset["train"].features["label"].num_classes
+    # Determine the number of labels from the original train_df
+    num_labels = train_df['label'].nunique() 
     print(f"Number of labels detected: {num_labels}")
 
-    # Define ID to label and label to ID mappings (for clear output and model config)
-    id2label = {0: "negative", 1: "neutral", 2: "positive"}
+    # Define ID to label and label to ID mappings (for clear output and model configuration)
+    # مطمئن شوید این mapping با داده های شما مطابقت دارد (0:negative, 1:neutral, 2:positive)
+    id2label = {0: "negative", 1: "neutral", 2: "positive"} 
     label2id = {"negative": 0, "neutral": 1, "positive": 2}
 
     print(f"Loading model: {model_name} with {num_labels} labels for sequence classification")
@@ -90,7 +107,7 @@ def main(training_strategy: str):
     
     # --- 4. Define Evaluation Metrics (Accuracy, F1, Precision, Recall) ---
     print("Defining compute_metrics function...")
-    # Load required evaluation metrics
+    # Load required evaluation metrics from 'evaluate' library
     accuracy_metric = evaluate.load("accuracy")
     f1_metric = evaluate.load("f1")
     precision_metric = evaluate.load("precision")
@@ -125,13 +142,12 @@ def main(training_strategy: str):
         for name, param in model.named_parameters():
             if "classifier" not in name:
                 param.requires_grad = False
-            # else: print(f"Parameter '{name}' is NOT frozen and will be trained (Head).")
         print("Model backbone (feature extractor) frozen. Only classification head will be trained.")
         
         # Optimized hyperparameters for Head-Only training (faster, less resource-intensive)
-        num_epochs = 10
-        batch_size = 32
-        learning_rate = 5e-4 # Higher learning rate for Head-Only training
+        num_epochs = 10 
+        batch_size = 32 
+        learning_rate = 5e-4 
 
     elif training_strategy == "layer_wise":
         # Strategy 2: Train Head and Last Layers of Backbone
@@ -139,27 +155,26 @@ def main(training_strategy: str):
         # We'll train the last 4 layers (layers 8, 9, 10, 11) and the classification head.
         for name, param in model.named_parameters():
             if any(f"encoder.layer.{i}" in name for i in range(8, 12)) or "classifier" in name:
-                param.requires_grad = True # These layers will be trained
-                # print(f"Parameter '{name}' is NOT frozen (Layer-wise).")
+                param.requires_grad = True 
             else:
-                param.requires_grad = False # Remaining layers are frozen
+                param.requires_grad = False 
         print("Model backbone (last 4 layers) and classification head will be trained.")
         
         # Optimized hyperparameters for Layer-Wise training (medium resources, good performance)
         num_epochs = 6 
         batch_size = 16
-        learning_rate = 2e-5 # Moderate learning rate
+        learning_rate = 2e-5 
 
     elif training_strategy == "full_fine_tune":
         # Strategy 3: Full Fine-tuning (Train all model parameters)
         for name, param in model.named_parameters():
-            param.requires_grad = True # All parameters will be trained
+            param.requires_grad = True 
         print("Full model fine-tuning. All parameters will be trained.")
         
         # Optimized hyperparameters for Full Fine-tuning (most resource-intensive, highest risk of overfitting)
         num_epochs = 3
         batch_size = 8
-        learning_rate = 5e-6 # Lower learning rate as many parameters are updated
+        learning_rate = 5e-6 
 
     else:
         raise ValueError(f"Unknown training strategy: {training_strategy}. Choose from 'head_only', 'layer_wise', 'full_fine_tune'.")
@@ -223,8 +238,6 @@ def main(training_strategy: str):
     trainer.save_model(final_model_path)
     print(f"Fine-tuned model saved to {final_model_path}")
 
-    # If push_to_hub=True was enabled in TrainingArguments and logged in:
-    # trainer.push_to_hub()
     print("Fine-tuning process completed successfully!")
 
 # This block allows the script to be run from the command line with arguments
