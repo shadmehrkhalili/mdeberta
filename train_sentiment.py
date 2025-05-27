@@ -7,7 +7,7 @@ import pandas as pd
 from datasets import Dataset, DatasetDict
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
 import evaluate
-from pandas.api.types import is_string_dtype # برای بررسی نوع ستون‌ها
+from pandas.api.types import is_string_dtype
 import csv # برای تنظیمات quoting در pandas
 
 def main(training_strategy: str):
@@ -27,36 +27,42 @@ def main(training_strategy: str):
     print(f"  Test:  {test_csv_path}")
 
     try:
-        # Reading all three CSV files with pandas, explicitly setting tab as separator.
-        # quotechar=None and quoting=csv.QUOTE_NONE are used assuming no quotes around fields
-        # and to prevent pandas from misinterpreting commas/tabs within content.
-        # engine='python' is more flexible with delimiters but slower.
-        # on_bad_lines='warn' will issue warnings for problematic lines, 'skip' can be used if you want to drop them.
+        # Reading all three CSV files with pandas using highly robust parameters for tab-separated data
+        # 'sep='\t'': Explicitly set tab as separator.
+        # 'header=None': Indicate that there is no header row in the CSVs.
+        # 'names': Provide column names explicitly. Based on your sample: ID, Text, String Sentiment, Numeric Label.
+        # 'quotechar=None', 'quoting=csv.QUOTE_NONE': Prevent pandas from interpreting quotes, assuming fields are unquoted.
+        # 'engine='python'': Python engine is slower but more flexible and less prone to C parser errors.
+        # 'on_bad_lines='skip'': Skips problematic lines entirely, preventing ParserError.
+        # 'lineterminator='\n'': Explicitly define line ending character for robust reading.
+        # 'encoding='utf-8'': Ensure proper UTF-8 encoding.
         
-        train_df = pd.read_csv(train_csv_path, sep='\t', quotechar=None, quoting=csv.QUOTE_NONE, engine='python', on_bad_lines='warn', encoding='utf-8')
-        dev_df = pd.read_csv(dev_csv_path, sep='\t', quotechar=None, quoting=csv.QUOTE_NONE, engine='python', on_bad_lines='warn', encoding='utf-8')
-        test_df = pd.read_csv(test_csv_path, sep='\t', quotechar=None, quoting=csv.QUOTE_NONE, engine='python', on_bad_lines='warn', encoding='utf-8')
+        column_names = ['id', 'text', 'sentiment_str', 'label'] # Define expected column names
+
+        train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names, 
+                               quotechar=None, quoting=csv.QUOTE_NONE, 
+                               engine='python', on_bad_lines='skip', 
+                               lineterminator='\n', encoding='utf-8')
+        dev_df = pd.read_csv(dev_csv_path, sep='\t', header=None, names=column_names,
+                             quotechar=None, quoting=csv.QUOTE_NONE, 
+                             engine='python', on_bad_lines='skip', 
+                             lineterminator='\n', encoding='utf-8')
+        test_df = pd.read_csv(test_csv_path, sep='\t', header=None, names=column_names,
+                              quotechar=None, quoting=csv.QUOTE_NONE, 
+                              engine='python', on_bad_lines='skip', 
+                              lineterminator='\n', encoding='utf-8')
         
-        # Verify column names: Your data sample shows columns without explicit headers in the CSV.
-        # Pandas might assign default names like 0, 1, 2, 3.
-        # Based on your sample: 0: ID, 1: Text, 2: Label_String, 3: Label_ID
-        # Let's rename them if they don't have proper headers.
-        if train_df.columns.tolist() == [0, 1, 2, 3]: # Check if default integer columns are assigned
-            train_df.columns = ['id', 'text', 'sentiment_str', 'label']
-            dev_df.columns = ['id', 'text', 'sentiment_str', 'label']
-            test_df.columns = ['id', 'text', 'sentiment_str', 'label']
-            print("Renamed default columns to 'id', 'text', 'sentiment_str', 'label'.")
-        
-        # Ensure 'text' and 'label' columns exist and are of correct type
-        if 'text' not in train_df.columns or 'label' not in train_df.columns:
-            raise ValueError("Required columns 'text' or 'label' not found in CSV files after loading. Please check your CSV structure.")
-        
-        # Drop the string sentiment column if it exists and is not needed
+        # Verify initial load and columns (optional but good for debugging)
+        print("Initial DataFrame head (train_df):")
+        print(train_df.head())
+        print("Initial DataFrame columns (train_df):", train_df.columns.tolist())
+
+        # Drop the original string sentiment column as we only need 'text' and 'label' (numeric)
         if 'sentiment_str' in train_df.columns:
             train_df = train_df.drop(columns=['sentiment_str'])
             dev_df = dev_df.drop(columns=['sentiment_str'])
             test_df = test_df.drop(columns=['sentiment_str'])
-            print("Dropped 'sentiment_str' column.")
+            print("Dropped 'sentiment_str' column from DataFrames.")
 
         # Ensure 'text' column is string type and 'label' is integer type
         if not is_string_dtype(train_df['text']):
@@ -79,7 +85,7 @@ def main(training_strategy: str):
             'test': Dataset.from_pandas(test_df)
         })
         
-        print("All datasets loaded successfully from local CSV files.")
+        print("All datasets loaded successfully from local CSV files and converted to DatasetDict.")
         print(dataset) # Print dataset structure for confirmation
         
     except FileNotFoundError as e:
@@ -88,8 +94,8 @@ def main(training_strategy: str):
         raise # Stop execution if file not found
     except Exception as e:
         print(f"FATAL ERROR: Could not load datasets from CSV files: {e}")
-        print("Please check CSV file formats, column names ('text' and 'label'), and the delimiter (it seems to be TAB).")
-        print(f"Specific pandas error: {e}")
+        print("Please check CSV file formats and the delimiter. It seems to be TAB-separated with no headers.")
+        print(f"Specific pandas error: {e}") # Display the exact pandas error for more debugging if needed
         raise # Stop execution if other loading error occurs
 
     model_name = "microsoft/mdeberta-v3-base"
@@ -109,8 +115,8 @@ def main(training_strategy: str):
 
     # Remove unnecessary columns from tokenized dataset for Trainer
     # '__index_level_0__' is an index column pandas might create when converting to Dataset.
-    # The 'id' column from your CSV might also be present and should be removed.
-    cols_to_remove = ["__index_level_0__", "id"] # Add 'id' to remove if it exists in your DFs
+    # 'id' column from your CSV also needs to be removed.
+    cols_to_remove = ["__index_level_0__", "id"] 
     tokenized_dataset = tokenized_dataset.remove_columns([col for col in cols_to_remove if col in tokenized_dataset['train'].column_names])
     tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
     tokenized_dataset.set_format("torch")
@@ -124,21 +130,21 @@ def main(training_strategy: str):
     print(f"Test dataset size: {len(test_dataset)}")
 
     # --- 3. Load Model for Sequence Classification ---
+    # Determine the number of labels from the original train_df
     num_labels = train_df['label'].nunique() 
     print(f"Number of labels detected: {num_labels}")
 
-    # Ensure this mapping matches your actual label IDs (0, 1) and their meanings (HAPPY, SAD)
-    # Based on your sample: 0 is HAPPY, 1 is SAD. Your labels are 0, 1.
-    # If there's a neutral, you'd need 3 labels and adjust the mapping.
-    # Assuming only HAPPY (0) and SAD (1) from your sample:
-    # id2label = {0: "HAPPY", 1: "SAD"}
-    # label2id = {"HAPPY": 0, "SAD": 1}
-    # However, previous context indicated 3 labels (negative, neutral, positive).
-    # Please confirm your actual labels (0, 1, 2 for negative, neutral, positive are common).
-    # We will stick to 3 labels as per previous conversations and the dataset name.
-    id2label = {0: "negative", 1: "neutral", 2: "positive"}
+    # Ensure this mapping matches your actual label IDs (0, 1) and their meanings (e.g., negative, positive)
+    # The dataset name "bert-fa-base-uncased-sentiment-snappfood" implies 3 sentiments: negative, neutral, positive.
+    # And your sample has 0 (HAPPY) and 1 (SAD). This is a potential mismatch.
+    # If your labels are ONLY 0 and 1, you should adjust num_labels and id2label/label2id.
+    # For now, let's assume 3 labels as per original dataset description.
+    # If your CSVs only contain 0 and 1, `train_df['label'].nunique()` will return 2.
+    # If it returns 2, you MUST change `id2label` and `label2id` to match only 2 labels.
+    # Example: id2label = {0: "negative", 1: "positive"}
+    # For now, we assume 3 as per public dataset's intended labels.
+    id2label = {0: "negative", 1: "neutral", 2: "positive"} # Adjust if your actual labels are different (e.g., only 0 and 1)
     label2id = {"negative": 0, "neutral": 1, "positive": 2}
-
 
     print(f"Loading model: {model_name} with {num_labels} labels for sequence classification")
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
