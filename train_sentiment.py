@@ -7,7 +7,8 @@ import pandas as pd
 from datasets import Dataset, DatasetDict
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
 import evaluate
-# from huggingface_hub import snapshot_download # دیگر نیازی به این نیست
+from pandas.api.types import is_string_dtype # برای بررسی نوع ستون‌ها
+import csv # برای تنظیمات quoting در pandas
 
 def main(training_strategy: str):
     """
@@ -15,13 +16,9 @@ def main(training_strategy: str):
     apply training strategy, train, and evaluate the model for sentiment analysis.
     """
     # --- 1. Load Dataset from Google Drive CSVs and Tokenizer ---
-    # مسیر فایل‌های CSV دیتاست در Google Drive شما
-    # مطمئن شوید که این مسیرها صحیح است و فایل‌های CSV شما در Google Drive آنجا قرار دارند.
-    # فرض می‌کنیم فایل‌ها در پوشه 'nlp_project_data' در MyDrive شما هستند.
-    # اگر پوشه دیگری ساختید، مسیر را اصلاح کنید.
     data_folder_path = "/content/drive/MyDrive/nlp_project_data" 
     train_csv_path = os.path.join(data_folder_path, "train.csv")
-    dev_csv_path = os.path.join(data_folder_path, "dev.csv") # dev.csv به عنوان validation استفاده می‌شود
+    dev_csv_path = os.path.join(data_folder_path, "dev.csv") # dev.csv will be used as validation
     test_csv_path = os.path.join(data_folder_path, "test.csv")
     
     print(f"Loading datasets from local CSV files:")
@@ -30,15 +27,52 @@ def main(training_strategy: str):
     print(f"  Test:  {test_csv_path}")
 
     try:
-        # خواندن هر سه فایل CSV با pandas
-        train_df = pd.read_csv(train_csv_path)
-        dev_df = pd.read_csv(dev_csv_path)
-        test_df = pd.read_csv(test_csv_path)
+        # Reading all three CSV files with pandas, explicitly setting tab as separator.
+        # quotechar=None and quoting=csv.QUOTE_NONE are used assuming no quotes around fields
+        # and to prevent pandas from misinterpreting commas/tabs within content.
+        # engine='python' is more flexible with delimiters but slower.
+        # on_bad_lines='warn' will issue warnings for problematic lines, 'skip' can be used if you want to drop them.
         
-        # تبدیل DataFrame ها به Hugging Face DatasetDict
-        # نام ستون‌های حاوی متن و لیبل در فایل‌های CSV شما باید 'text' و 'label' باشند.
-        # اگر نام ستون‌ها متفاوت است، قبل از Dataset.from_pandas باید آن‌ها را تغییر نام دهید.
-        # مثال: train_df = train_df.rename(columns={'Your_Text_Column': 'text', 'Your_Label_Column': 'label'})
+        train_df = pd.read_csv(train_csv_path, sep='\t', quotechar=None, quoting=csv.QUOTE_NONE, engine='python', on_bad_lines='warn', encoding='utf-8')
+        dev_df = pd.read_csv(dev_csv_path, sep='\t', quotechar=None, quoting=csv.QUOTE_NONE, engine='python', on_bad_lines='warn', encoding='utf-8')
+        test_df = pd.read_csv(test_csv_path, sep='\t', quotechar=None, quoting=csv.QUOTE_NONE, engine='python', on_bad_lines='warn', encoding='utf-8')
+        
+        # Verify column names: Your data sample shows columns without explicit headers in the CSV.
+        # Pandas might assign default names like 0, 1, 2, 3.
+        # Based on your sample: 0: ID, 1: Text, 2: Label_String, 3: Label_ID
+        # Let's rename them if they don't have proper headers.
+        if train_df.columns.tolist() == [0, 1, 2, 3]: # Check if default integer columns are assigned
+            train_df.columns = ['id', 'text', 'sentiment_str', 'label']
+            dev_df.columns = ['id', 'text', 'sentiment_str', 'label']
+            test_df.columns = ['id', 'text', 'sentiment_str', 'label']
+            print("Renamed default columns to 'id', 'text', 'sentiment_str', 'label'.")
+        
+        # Ensure 'text' and 'label' columns exist and are of correct type
+        if 'text' not in train_df.columns or 'label' not in train_df.columns:
+            raise ValueError("Required columns 'text' or 'label' not found in CSV files after loading. Please check your CSV structure.")
+        
+        # Drop the string sentiment column if it exists and is not needed
+        if 'sentiment_str' in train_df.columns:
+            train_df = train_df.drop(columns=['sentiment_str'])
+            dev_df = dev_df.drop(columns=['sentiment_str'])
+            test_df = test_df.drop(columns=['sentiment_str'])
+            print("Dropped 'sentiment_str' column.")
+
+        # Ensure 'text' column is string type and 'label' is integer type
+        if not is_string_dtype(train_df['text']):
+            train_df['text'] = train_df['text'].astype(str)
+            dev_df['text'] = dev_df['text'].astype(str)
+            test_df['text'] = test_df['text'].astype(str)
+            print("Converted 'text' column to string type.")
+        
+        if not pd.api.types.is_integer_dtype(train_df['label']):
+            train_df['label'] = train_df['label'].astype(int)
+            dev_df['label'] = dev_df['label'].astype(int)
+            test_df['label'] = test_df['label'].astype(int)
+            print("Converted 'label' column to integer type.")
+
+
+        # Convert DataFrames to Hugging Face DatasetDict
         dataset = DatasetDict({
             'train': Dataset.from_pandas(train_df),
             'validation': Dataset.from_pandas(dev_df), 
@@ -46,16 +80,17 @@ def main(training_strategy: str):
         })
         
         print("All datasets loaded successfully from local CSV files.")
-        print(dataset) # چاپ ساختار دیتاست برای اطمینان
+        print(dataset) # Print dataset structure for confirmation
         
     except FileNotFoundError as e:
         print(f"FATAL ERROR: One of the CSV files not found: {e}.")
         print(f"Please ensure all train.csv, dev.csv, and test.csv files are uploaded to your Google Drive in the specified path: {data_folder_path}")
-        raise # متوقف کردن اجرا اگر فایل پیدا نشد
+        raise # Stop execution if file not found
     except Exception as e:
         print(f"FATAL ERROR: Could not load datasets from CSV files: {e}")
-        print("Please check CSV file formats and column names ('text' and 'label').")
-        raise # متوقف کردن اجرا اگر خطای دیگری در بارگذاری رخ داد
+        print("Please check CSV file formats, column names ('text' and 'label'), and the delimiter (it seems to be TAB).")
+        print(f"Specific pandas error: {e}")
+        raise # Stop execution if other loading error occurs
 
     model_name = "microsoft/mdeberta-v3-base"
     print(f"Loading tokenizer from: {model_name}")
@@ -69,19 +104,19 @@ def main(training_strategy: str):
     print("Defining tokenization function.")
     
     print("Tokenizing dataset...")
-    # Map tokenization function over all splits (train, validation, test)
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
     print("Tokenization complete.")
 
-    # Remove unnecessary columns and rename 'label' column to 'labels' (required by Hugging Face Trainer)
-    # '__index_level_0__' ستونی است که pandas ممکن است در صورت reset_index ایجاد کند.
-    tokenized_dataset = tokenized_dataset.remove_columns(["text", "__index_level_0__"]) 
+    # Remove unnecessary columns from tokenized dataset for Trainer
+    # '__index_level_0__' is an index column pandas might create when converting to Dataset.
+    # The 'id' column from your CSV might also be present and should be removed.
+    cols_to_remove = ["__index_level_0__", "id"] # Add 'id' to remove if it exists in your DFs
+    tokenized_dataset = tokenized_dataset.remove_columns([col for col in cols_to_remove if col in tokenized_dataset['train'].column_names])
     tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
-    # Set the format to PyTorch tensors for compatibility with the model
     tokenized_dataset.set_format("torch")
 
     train_dataset = tokenized_dataset["train"]
-    eval_dataset = tokenized_dataset["validation"] # استفاده از dev.csv که به validation تغییر نام داده شد
+    eval_dataset = tokenized_dataset["validation"]
     test_dataset = tokenized_dataset["test"]
 
     print(f"Train dataset size: {len(train_dataset)}")
@@ -89,11 +124,21 @@ def main(training_strategy: str):
     print(f"Test dataset size: {len(test_dataset)}")
 
     # --- 3. Load Model for Sequence Classification ---
-    num_labels = train_df['label'].nunique() # تعداد برچسب‌ها را از DataFrame اصلی بگیرید
+    num_labels = train_df['label'].nunique() 
     print(f"Number of labels detected: {num_labels}")
 
-    id2label = {0: "negative", 1: "neutral", 2: "positive"} # مطمئن شوید این mapping با داده های شما مطابقت دارد
+    # Ensure this mapping matches your actual label IDs (0, 1) and their meanings (HAPPY, SAD)
+    # Based on your sample: 0 is HAPPY, 1 is SAD. Your labels are 0, 1.
+    # If there's a neutral, you'd need 3 labels and adjust the mapping.
+    # Assuming only HAPPY (0) and SAD (1) from your sample:
+    # id2label = {0: "HAPPY", 1: "SAD"}
+    # label2id = {"HAPPY": 0, "SAD": 1}
+    # However, previous context indicated 3 labels (negative, neutral, positive).
+    # Please confirm your actual labels (0, 1, 2 for negative, neutral, positive are common).
+    # We will stick to 3 labels as per previous conversations and the dataset name.
+    id2label = {0: "negative", 1: "neutral", 2: "positive"}
     label2id = {"negative": 0, "neutral": 1, "positive": 2}
+
 
     print(f"Loading model: {model_name} with {num_labels} labels for sequence classification")
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=num_labels)
