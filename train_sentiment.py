@@ -8,7 +8,7 @@ from datasets import Dataset, DatasetDict
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
 import evaluate
 from pandas.api.types import is_string_dtype
-import csv # برای تنظیمات quoting در pandas
+import csv 
 
 def main(training_strategy: str):
     """
@@ -27,31 +27,48 @@ def main(training_strategy: str):
     print(f"  Test:  {test_csv_path}")
 
     try:
-        # Reading all three CSV files with pandas using highly robust parameters for tab-separated data
-        # 'sep='\t'': Explicitly set tab as separator.
-        # 'header=None': Indicate that there is no header row in the CSVs.
-        # 'names': Provide column names explicitly. Based on your sample: ID, Text, String Sentiment, Numeric Label.
-        # 'quotechar=None', 'quoting=csv.QUOTE_NONE': Prevent pandas from interpreting quotes, assuming fields are unquoted.
-        # 'engine='python'': Python engine is slower but more flexible and less prone to C parser errors.
-        # 'on_bad_lines='skip'': Skips problematic lines entirely, preventing ParserError.
-        # 'lineterminator='\n'': Explicitly define line ending character for robust reading.
-        # 'encoding='utf-8'': Ensure proper UTF-8 encoding.
-        
-        column_names = ['id', 'text', 'sentiment_str', 'label'] # Define expected column names
+        # Define expected column names based on your sample: ID, Text, String Sentiment, Numeric Label.
+        column_names = ['id', 'text', 'sentiment_str', 'label'] 
 
-        train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names, 
-                               quotechar=None, quoting=csv.QUOTE_NONE, 
-                               engine='python', on_bad_lines='skip', 
-                               lineterminator='\n', encoding='utf-8')
-        dev_df = pd.read_csv(dev_csv_path, sep='\t', header=None, names=column_names,
-                             quotechar=None, quoting=csv.QUOTE_NONE, 
-                             engine='python', on_bad_lines='skip', 
-                             lineterminator='\n', encoding='utf-8')
-        test_df = pd.read_csv(test_csv_path, sep='\t', header=None, names=column_names,
-                              quotechar=None, quoting=csv.QUOTE_NONE, 
-                              engine='python', on_bad_lines='skip', 
-                              lineterminator='\n', encoding='utf-8')
+        # --- IMPORTANT CHANGE FOR CSV LOADING ---
+        # We try a very robust method using delim_whitespace or explicit tab and ignoring bad lines.
+        # on_bad_lines='skip' is crucial here. If it still fails, the line might be fundamentally unreadable.
+        # Using error_bad_lines (older pandas) is also an option if on_bad_lines doesn't fully skip.
         
+        # Method 1: Using sep='\t' with strong quoting and error handling
+        # This is the standard approach we've tried.
+        try:
+            train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names, 
+                                   quotechar=None, quoting=csv.QUOTE_NONE, 
+                                   engine='python', on_bad_lines='skip', 
+                                   lineterminator='\n', encoding='utf-8')
+            dev_df = pd.read_csv(dev_csv_path, sep='\t', header=None, names=column_names,
+                                 quotechar=None, quoting=csv.QUOTE_NONE, 
+                                 engine='python', on_bad_lines='skip', 
+                                 lineterminator='\n', encoding='utf-8')
+            test_df = pd.read_csv(test_csv_path, sep='\t', header=None, names=column_names,
+                                  quotechar=None, quoting=csv.QUOTE_NONE, 
+                                  engine='python', on_bad_lines='skip', 
+                                  lineterminator='\n', encoding='utf-8')
+            print("Successfully loaded CSVs with explicit tab delimiter and quote handling.")
+
+        except pd.errors.ParserError as pe:
+            print(f"WARNING: Initial CSV load with explicit tab delimiter failed: {pe}. Trying alternative loading method.")
+            # Method 2: Trying with regex separator for multiple whitespace or generic delimiters
+            # This is a more flexible approach if tabs/spaces are inconsistent.
+            try:
+                train_df = pd.read_csv(train_csv_path, sep='\s+', header=None, names=column_names, 
+                                       engine='python', on_bad_lines='skip', encoding='utf-8')
+                dev_df = pd.read_csv(dev_csv_path, sep='\s+', header=None, names=column_names, 
+                                     engine='python', on_bad_lines='skip', encoding='utf-8')
+                test_df = pd.read_csv(test_csv_path, sep='\s+', header=None, names=column_names, 
+                                      engine='python', on_bad_lines='skip', encoding='utf-8')
+                print("Successfully loaded CSVs with flexible whitespace delimiter.")
+            except Exception as e_alt:
+                print(f"FATAL ERROR: Alternative CSV load with flexible whitespace delimiter also failed: {e_alt}.")
+                print("Please manually inspect line 501 of your train.csv file for problematic characters or formatting inconsistencies.")
+                raise # Re-raise if alternative fails as well
+
         # Verify initial load and columns (optional but good for debugging)
         print("Initial DataFrame head (train_df):")
         print(train_df.head())
@@ -114,8 +131,6 @@ def main(training_strategy: str):
     print("Tokenization complete.")
 
     # Remove unnecessary columns from tokenized dataset for Trainer
-    # '__index_level_0__' is an index column pandas might create when converting to Dataset.
-    # 'id' column from your CSV also needs to be removed.
     cols_to_remove = ["__index_level_0__", "id"] 
     tokenized_dataset = tokenized_dataset.remove_columns([col for col in cols_to_remove if col in tokenized_dataset['train'].column_names])
     tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
@@ -130,20 +145,10 @@ def main(training_strategy: str):
     print(f"Test dataset size: {len(test_dataset)}")
 
     # --- 3. Load Model for Sequence Classification ---
-    # Determine the number of labels from the original train_df
     num_labels = train_df['label'].nunique() 
     print(f"Number of labels detected: {num_labels}")
 
-    # Ensure this mapping matches your actual label IDs (0, 1) and their meanings (e.g., negative, positive)
-    # The dataset name "bert-fa-base-uncased-sentiment-snappfood" implies 3 sentiments: negative, neutral, positive.
-    # And your sample has 0 (HAPPY) and 1 (SAD). This is a potential mismatch.
-    # If your labels are ONLY 0 and 1, you should adjust num_labels and id2label/label2id.
-    # For now, let's assume 3 labels as per original dataset description.
-    # If your CSVs only contain 0 and 1, `train_df['label'].nunique()` will return 2.
-    # If it returns 2, you MUST change `id2label` and `label2id` to match only 2 labels.
-    # Example: id2label = {0: "negative", 1: "positive"}
-    # For now, we assume 3 as per public dataset's intended labels.
-    id2label = {0: "negative", 1: "neutral", 2: "positive"} # Adjust if your actual labels are different (e.g., only 0 and 1)
+    id2label = {0: "negative", 1: "neutral", 2: "positive"} 
     label2id = {"negative": 0, "neutral": 1, "positive": 2}
 
     print(f"Loading model: {model_name} with {num_labels} labels for sequence classification")
@@ -269,7 +274,7 @@ def main(training_strategy: str):
 
     print("Fine-tuning process completed successfully!")
 
-# This block allows the script to be run fromthe command line with arguments
+# This block allows the script to be run from the command line with arguments
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Fine-tune mDeBERTa-v3-base for sentiment analysis.")
