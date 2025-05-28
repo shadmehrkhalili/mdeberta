@@ -30,17 +30,17 @@ def main(training_strategy: str):
         column_names = ['id', 'text', 'sentiment_str', 'label']
 
         train_df = pd.read_csv(train_csv_path, sep='\t', header=None, names=column_names,
-                               skiprows=1, 
+                               skiprows=1,
                                quotechar=None, quoting=csv.QUOTE_NONE,
                                engine='c', on_bad_lines='skip',
                                encoding='utf-8')
         dev_df = pd.read_csv(dev_csv_path, sep='\t', header=None, names=column_names,
-                             skiprows=1, 
+                             skiprows=1,
                              quotechar=None, quoting=csv.QUOTE_NONE,
                              engine='c', on_bad_lines='skip',
                              encoding='utf-8')
         test_df = pd.read_csv(test_csv_path, sep='\t', header=None, names=column_names,
-                              skiprows=1, 
+                              skiprows=1,
                               quotechar=None, quoting=csv.QUOTE_NONE,
                               engine='c', on_bad_lines='skip',
                               encoding='utf-8')
@@ -127,17 +127,15 @@ def main(training_strategy: str):
         raise ValueError("Could not determine number of labels. 'labels' column missing in tokenized training data.")
     print(f"Number of labels detected: {num_labels}")
 
-    # Define f1_average_method here, once num_labels is known
     f1_average_method = "weighted" if num_labels > 2 else "binary"
 
-    if num_labels == 3: # Example for 3 labels
+    if num_labels == 3:
         id2label = {0: "negative", 1: "neutral", 2: "positive"}
         label2id = {"negative": 0, "neutral": 1, "positive": 2}
-    elif num_labels == 2: # Example for 2 labels (binary classification)
-        # Ensure your labels in CSV (0, 1) match this mapping if they are not already 'negative'/'positive'
-        id2label = {0: "negative", 1: "positive"} # Adjust if your label '0' means positive, '1' negative
+    elif num_labels == 2:
+        id2label = {0: "negative", 1: "positive"}
         label2id = {"negative": 0, "positive": 1}
-    else: # Generic mapping for other numbers of labels
+    else:
         id2label = {i: f"LABEL_{i}" for i in range(num_labels)}
         label2id = {f"LABEL_{i}": i for i in range(num_labels)}
         print(f"Warning: Auto-generated id2label and label2id for {num_labels} labels.")
@@ -156,14 +154,10 @@ def main(training_strategy: str):
     def compute_metrics(eval_pred):
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)
-        
         accuracy = accuracy_metric.compute(predictions=predictions, references=labels)
-        # f1_average_method is accessible from the outer scope of main()
-        
         f1 = f1_metric.compute(predictions=predictions, references=labels, average=f1_average_method)
         precision = precision_metric.compute(predictions=predictions, references=labels, average=f1_average_method)
         recall = recall_metric.compute(predictions=predictions, references=labels, average=f1_average_method)
-        
         return {
             "accuracy": accuracy["accuracy"],
             f"f1_{f1_average_method}": f1["f1"],
@@ -175,20 +169,19 @@ def main(training_strategy: str):
     print(f"Applying training strategy: {training_strategy}")
     if training_strategy == "head_only":
         for name, param in model.named_parameters():
-            if "classifier" not in name: 
+            if "classifier" not in name:
                 param.requires_grad = False
         print("Model backbone (feature extractor) frozen. Only classification head will be trained.")
         num_epochs = 10
         batch_size = 32
         learning_rate = 5e-4
     elif training_strategy == "layer_wise":
-        layers_to_unfreeze = 4 
+        layers_to_unfreeze = 4
         if hasattr(model.config, 'num_hidden_layers'):
             num_total_layers = model.config.num_hidden_layers
-        else: # Fallback for models that might not have this specific config name (e.g. deberta might use model.deberta.encoder.layer)
-            num_total_layers = 12 # Common default for base models
+        else:
+            num_total_layers = 12
             print(f"Warning: model.config.num_hidden_layers not found. Assuming {num_total_layers} layers for layer_wise unfreezing.")
-
         for name, param in model.named_parameters():
             if "classifier" in name or \
                any(f"encoder.layer.{i}" in name for i in range(num_total_layers - layers_to_unfreeze, num_total_layers)):
@@ -205,7 +198,7 @@ def main(training_strategy: str):
         print("Full model fine-tuning. All parameters will be trained.")
         num_epochs = 3
         batch_size = 8
-        learning_rate = 5e-6 
+        learning_rate = 5e-6
     else:
         raise ValueError(f"Unknown training strategy: {training_strategy}. Choose from 'head_only', 'layer_wise', 'full_fine_tune'.")
 
@@ -215,37 +208,35 @@ def main(training_strategy: str):
     print(f"Trainable parameters: {trainable_params:,} ({trainable_params/total_params:.2%})")
 
     print("Configuring TrainingArguments...")
-    output_dir = f"/content/drive/MyDrive/mdeberta_sentiment_{training_strategy}" 
+    output_dir = f"/content/drive/MyDrive/mdeberta_sentiment_{training_strategy}"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
 
     metric_to_optimize_for_best_model = f"f1_{f1_average_method}" if num_labels > 1 else "accuracy"
 
-    # Calculate total training steps for warmup_steps heuristic
-    # This needs train_dataset to be defined, which it is by this point
     if len(train_dataset) > 0 and batch_size > 0 and num_epochs > 0:
         total_training_steps = (len(train_dataset) // batch_size) * num_epochs
-        warmup_ratio = 0.1 # 10% of training steps for warmup
+        warmup_ratio = 0.1
         calculated_warmup_steps = int(total_training_steps * warmup_ratio)
     else:
-        calculated_warmup_steps = 500 # Fallback if dataset/params are zero
+        calculated_warmup_steps = 500
 
     training_args = TrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=num_epochs,        
-        per_device_train_batch_size=batch_size, 
-        per_device_eval_batch_size=batch_size,  
-        learning_rate=learning_rate,        
-        warmup_steps=max(100, calculated_warmup_steps), # Ensure at least 100 warmup steps                  
-        weight_decay=0.01,                  
-        logging_dir=f'{output_dir}/logs',   
-        logging_strategy="epoch",           
-        evaluation_strategy="epoch",       
-        save_strategy="epoch",              
-        load_best_model_at_end=True,        
-        metric_for_best_model=metric_to_optimize_for_best_model, 
-        greater_is_better=True,             
+        num_train_epochs=num_epochs,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        learning_rate=learning_rate,
+        warmup_steps=max(100, calculated_warmup_steps),
+        weight_decay=0.01,
+        logging_dir=f'{output_dir}/logs',
+        logging_strategy="epoch",
+        eval_strategy="epoch",  # <--- CORRECTED ARGUMENT NAME
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model=metric_to_optimize_for_best_model,
+        greater_is_better=True,
     )
     print("TrainingArguments configured.")
 
@@ -256,16 +247,16 @@ def main(training_strategy: str):
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         compute_metrics=compute_metrics,
-        tokenizer=tokenizer, 
+        tokenizer=tokenizer,
     )
     print("Trainer initialized.")
-    
+
     print("Starting model training...")
     trainer.train()
     print("Training finished.")
 
     print("\nEvaluating on test set...")
-    test_results = trainer.evaluate(eval_dataset=test_dataset) 
+    test_results = trainer.evaluate(eval_dataset=test_dataset)
     print(f"\nTest results: {test_results}")
 
     final_model_path = os.path.join(output_dir, "final_model_and_tokenizer")
@@ -281,5 +272,5 @@ if __name__ == "__main__":
                         choices=["head_only", "layer_wise", "full_fine_tune"],
                         help="Training strategy: 'head_only', 'layer_wise', or 'full_fine_tune'")
     args = parser.parse_args()
-    
+
     main(training_strategy=args.strategy)
